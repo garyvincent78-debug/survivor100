@@ -91,11 +91,12 @@ async function broker(out) {
     S.last[o.sym] = Object.assign(S.last[o.sym] || { c: q.px, t: Math.floor(t / H) * H, x: null }, { live: q.px, ltT: q.t, obs: t, url: CBT + o.sym + '/ticker', src: 'cb' });
   }
   for (const x of Object.keys(S.pos)) if (Q[x]) S.mark[x] = (Q[x].bid + Q[x].ask) / 2;
-  const LV = E.liq(S), thr = E.thrAt(S, t), lastT = out.pts.length ? out.pts[out.pts.length - 1][0] : 0;
-  if (t > lastT) out.pts.push([t, r4(LV), r4(thr)]);
+  const LV = E.liq(S), thr = E.thrAt(S, t), lastT = out.pts.length ? out.pts[out.pts.length - 1][0] : (S.lastPt || 0);
+  if (t - lastT >= 290000 || LV < thr) { out.pts.push([t, r4(LV), r4(thr)]); S.lastPt = t }
   if (LV < thr) { S.status = 'dead'; S.died = { ts: t, lv: r4(LV), thr: r4(thr) }; S.pend = []; S.orders = [] }
 }
 let lim = now;
+const anomOnce = t => { const l = S.anom[S.anom.length - 1]; if (!l || l.t !== t || now - l.ts > 3600000) S.anom.push({ ts: now, t }) };
 const hold = u => { lim = Math.min(lim, u.lastObs || 0) };
 let kq = null;
 const handle = (u, data, obs, url) => {
@@ -126,7 +127,7 @@ if (S.status === 'alive') {
   if (ys.length) for (const it of E.planYh(ys, B, now, S.cursor || undefined)) {
     let r = await jget(it.url); if (r.status !== 200) { const r2 = await jget(it.url.replace('query1.', 'query2.')); if (r2.status === 200) r = r2 } health.src['yh:' + it.us[0].sym] = r.status;
     const d = r.status === 200 && r.json && !r.json.spark ? r.json : null;
-    if (!d) { S.yfail = (S.yfail || 0) + 1; if (S.yfail < 3) it.us.forEach(hold); S.anom.push({ ts: now, t: 'Lecture groupée Yahoo en échec (HTTP ' + r.status + ')' }); continue }
+    if (!d) { S.yfail = (S.yfail || 0) + 1; if (S.yfail < 3) it.us.forEach(hold); anomOnce('Lecture groupée Yahoo en échec (HTTP ' + r.status + ')'); continue }
     S.yfail = 0; E.ingestYh(it, d, Date.now(), handle).forEach(u => { hold(u); S.anom.push({ ts: now, t: u.sym + ' : absent de la réponse Yahoo' }) });
   }
   const out = E.advance(S, B, lim, now); S.lastFetch = now; S.anom = S.anom.slice(-40);
