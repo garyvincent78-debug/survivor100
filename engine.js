@@ -63,16 +63,15 @@ function fill(S,o,f,T,out){
  const{u,bar}=f,fr=FEE[u.src],lvB=liq(S),cashB=S.cash,dk=Math.floor(bar.t/DAY);
  if(S.tt.d!==dk)S.tt={d:dk,n:0};
  if(o.side==='buy'){
-  if(S.pos[o.sym])return null;
   const px=bar.o*(1+SLIP),amt=Math.min(o.amt,S.cash/(1+fr));if(amt<MIN_ORDER)return null;
-  const q=amt/px,fee=amt*fr;S.cash-=amt+fee;S.pos[o.sym]={q,cost:amt+fee,peak:px,entryT:T,src:u.src,model:o.model};
+  const q=amt/px,fee=amt*fr;S.cash-=amt+fee;const p0=S.pos[o.sym];if(p0){p0.q+=q;p0.cost+=amt+fee;p0.peak=Math.max(p0.peak,px)}else S.pos[o.sym]={q,cost:amt+fee,peak:px,entryT:T,src:u.src,model:o.model};
   S.stats.fees+=fee;S.stats.feeSince+=fee;S.stats.nSince++;S.tt.n++;
   return journal(S,out,o,f,px,q,amt,fee,cashB,lvB,null)}
  const p=S.pos[o.sym];if(!p)return null;
- const px=bar.o*(1-SLIP),gross=p.q*px,fee=gross*fr,pnl=gross-fee-p.cost;
- S.cash+=gross-fee;delete S.pos[o.sym];
+ const qs=o.qty>0?Math.min(o.qty,p.q):p.q,fr0=qs/p.q,cp=p.cost*fr0,px=bar.o*(1-SLIP),gross=qs*px,fee=gross*fr,pnl=gross-fee-cp;
+ S.cash+=gross-fee;if(fr0>=0.999999)delete S.pos[o.sym];else{p.q-=qs;p.cost-=cp}
  S.stats.fees+=fee;S.stats.feeSince+=fee;S.stats.nSince++;S.stats.realized+=pnl;S.stats.grossSince+=pnl+fee;pnl>0?S.stats.wins++:S.stats.losses++;S.tt.n++;
- return journal(S,out,o,f,px,p.q,gross,fee,cashB,lvB,pnl)}
+ return journal(S,out,o,f,px,qs,gross,fee,cashB,lvB,pnl)}
 function review(S,tau,LV,thr,d){
  const cush=(LV-thr)/LV,st=S.stats;
  for(const e of S.evo)if(e.kind!=='revue'&&e.lv1==null)e.lv1=r4(LV);
@@ -101,6 +100,7 @@ function stepOne(S,B,T,out){
  if(!S.day0||S.day0.d!==d)S.day0={d,lv:LV,done:false};
  if(!S.day0.done&&LV>=S.day0.lv*(1+par('dayGoal',DAY_GOAL))){S.day0.done=true;S.evo.push({ts:tau,kind:'objectif',text:`Objectif du jour atteint : ${f2(LV)} € (+${f2((LV/S.day0.lv-1)*100)} % depuis minuit) · plus aucun achat jusqu’à minuit, les stops restent actifs`})}
  const E=expCap(LV,thr),dk=Math.floor(tau/DAY);let used=S.tt.d===dk?S.tt.n:0,planned=S.pend.length;
+ if(!par('auto',0))return;
  for(const f of fresh){const p=S.pos[f.u.sym],sc=S.sc[f.u.sym];if(!p||!sc||hasPend(S,f.u.sym))continue;
   p.peak=Math.max(p.peak,f.bar.c);const stop=f.bar.c<p.peak-par('stopAtr',3)*sc.atr;
   if((T-p.entryT)/H>=par('minHold',MIN_HOLD)&&(sc.comb<0||stop)){const m=bestModel(S,sc.s);S.pend.push({sym:f.u.sym,side:'sell',decT:T,model:m.id,why:stop?`Stop suiveur : cours sous le plus haut moins ${par('stopAtr',3)} ATR`:`Score combiné ${f2(sc.comb)} < 0 · ${m.txt}`})}}
