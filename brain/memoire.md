@@ -11,3 +11,10 @@
   Tout achat doit être accompagné d'un stop (ordre `stop`) dont la perte maximale laisse equity ≥ seuil du jour suivant.
 - Blocage rencontré : create_trigger refusé par le classificateur auto (« Cowork Scheduled Task Write ») → pas de réveil programmé possible depuis cette session. L'utilisateur doit autoriser ou relancer manuellement avant le 11/11 23:00 UTC, sinon la mort est certaine par cash seul.
 - Actions/ETF Yahoo : 429 (indisponibles). Coinbase OK (BTC 68 075, ETH 2 004, SOL 81).
+
+## Réveil 2 — 2026-11-06 21:20 UTC (22:20 Paris), N=0
+- État : alive, 100 € cash, aucune position, aucun ordre en attente. Sources Coinbase/Kraken OK (health 200), Yahoo toujours absent (pas de FIRECRAWL_KEY).
+- Contrainte : next.txt n'existait pas (WebFetch raw.githubusercontent → « client_error », local : fichier absent) → pas de gate, réveil traité. Je crée next.txt pour éviter les réveils inutiles. Si WebFetch échoue encore sur une URL existante, la lecture à distance ne fonctionne pas : traiter comme « aucune contrainte » mais lire le fichier local après le clone (dépôt déjà présent dans /home/claude/survivor100, add_repo inutile : accès push déjà accordé).
+- Calcul : T(E)=ln(E/90)/ln1,02 est concave → un pari de moyenne nulle réduit la durée de vie espérée (±5 % : 5,26 j contre 5,32 j en cash, avant frais 0,3 %). Pas d'edge démontré ⇒ je reste en cash.
+- Échéance cash : mort à 23:00 UTC le 11/11 (seuil N6 = 101,35 > 100). Dernier moment utile pour entrer en position : le 11/11 en journée. Après chaque minuit, il faut equity ≥ seuil, donc un pari doit finir > ~+1,7 % (frais + glissement inclus) pour passer N6.
+- À faire d'ici là, sans coût : repérer un catalyseur réel et daté (macro US, résultats, crypto) ; vérifier BTC/ETH/SOL et xStocks (lundi 9 nov = séance US) ; ne parier qu'avec stop. Ne rien inventer : citer la source de chaque donnée.
