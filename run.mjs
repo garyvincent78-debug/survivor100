@@ -52,7 +52,7 @@ if (S.status === 'alive') {
   // actions, ETF, matières premières, devises : lectures groupées Yahoo (20 actifs par lecture)
   const ys = S.uni.filter(u => u.on && u.src === 'yh');
   if (ys.length) for (const it of E.planYh(ys, B, now, S.cursor || undefined)) {
-    const r = await jget(it.url); health.src['yh:' + it.us[0].sym] = r.status;
+    let r = await jget(it.url); if (r.status !== 200) { const r2 = await jget(it.url.replace('query1.', 'query2.')); if (r2.status === 200) r = r2 } health.src['yh:' + it.us[0].sym] = r.status;
     const d = r.status === 200 && r.json && !r.json.spark ? r.json : null;
     if (!d) { S.yfail = (S.yfail || 0) + 1; if (S.yfail < 3) it.us.forEach(hold); S.anom.push({ ts: now, t: 'Lecture groupée Yahoo en échec (HTTP ' + r.status + ')' }); continue }
     S.yfail = 0; E.ingestYh(it, d, Date.now(), handle).forEach(u => { hold(u); S.anom.push({ ts: now, t: u.sym + ' : absent de la réponse Yahoo' }) });

@@ -1,6 +1,7 @@
 
 const H=900000,HOUR=3600000,DAY=86400000,START_CASH=100,FLOOR0=90,GROW=1.02;
 const FEE={cb:0.001,yh:0.001},SLIP=0.0005,MIN_ORDER=5,MIN_HOLD=4,MAX_TRADES_DAY=12;
+const DAY_GOAL=0.02;
 const SRC={cb:'Coinbase Exchange',yh:'Yahoo Finance'};
 const KR={'BTC-EUR':'XBTEUR','ETH-EUR':'ETHEUR','SOL-EUR':'SOLEUR','XRP-EUR':'XRPEUR'},XTOL=0.01,CHUNK=19,REF='EURUSD=X';
 const CB_URL='https://api.exchange.coinbase.com/products/',SP_URL='https://query1.finance.yahoo.com/v8/finance/spark?symbols=',KR_URL='https://api.kraken.com/0/public/Ticker?pair=';
@@ -93,11 +94,13 @@ function stepOne(S,B,T,out){
  out.pts.push([tau,r4(LV),r4(thr)]);
  if(LV<thr){S.status='dead';S.died={ts:tau,lv:r4(LV),thr:r4(thr)};S.pend=[];return}
  const d=dayN(S,tau);if(d>S.dayIdx)review(S,tau,LV,thr,d);
+ if(!S.day0||S.day0.d!==d)S.day0={d,lv:LV,done:false};
+ if(!S.day0.done&&LV>=S.day0.lv*(1+DAY_GOAL)){S.day0.done=true;S.evo.push({ts:tau,kind:'objectif',text:`Objectif du jour atteint : ${f2(LV)} € (+${f2((LV/S.day0.lv-1)*100)} % depuis minuit) · plus aucun achat jusqu’à minuit, les stops restent actifs`})}
  const E=expCap(LV,thr),dk=Math.floor(tau/DAY);let used=S.tt.d===dk?S.tt.n:0,planned=S.pend.length;
  for(const f of fresh){const p=S.pos[f.u.sym],sc=S.sc[f.u.sym];if(!p||!sc||hasPend(S,f.u.sym))continue;
   p.peak=Math.max(p.peak,f.bar.c);const stop=f.bar.c<p.peak-3*sc.atr;
   if((T-p.entryT)/H>=MIN_HOLD&&(sc.comb<0||stop)){const m=bestModel(S,sc.s);S.pend.push({sym:f.u.sym,side:'sell',decT:T,model:m.id,why:stop?'Stop suiveur : cours sous le plus haut moins 3 ATR':`Score combiné ${f2(sc.comb)} < 0 · ${m.txt}`})}}
- const cands=fresh.map(f=>({f,sc:S.sc[f.u.sym]})).filter(x=>x.sc&&x.sc.t===x.f.bar.t&&x.sc.comb>S.entryThr&&!S.pos[x.f.u.sym]&&!hasPend(S,x.f.u.sym)).sort((a,b)=>b.sc.comb-a.sc.comb).slice(0,2);
+ const cands=S.day0.done?[]:fresh.map(f=>({f,sc:S.sc[f.u.sym]})).filter(x=>x.sc&&x.sc.t===x.f.bar.t&&x.sc.comb>S.entryThr&&!S.pos[x.f.u.sym]&&!hasPend(S,x.f.u.sym)).sort((a,b)=>b.sc.comb-a.sc.comb).slice(0,2);
  if(cands.length){let room=Math.max(0,E*LV-expo(S)),tot=cands.reduce((a,x)=>a+x.sc.comb,0);
   for(const x of cands){if(used+planned>=MAX_TRADES_DAY)break;const amt=Math.min(E*LV*x.sc.comb/tot,room);
    if(amt>=Math.max(MIN_ORDER,0.08*LV)){const m=bestModel(S,x.sc.s);S.pend.push({sym:x.f.u.sym,side:'buy',decT:T,amt:r4(amt),model:m.id,why:`Score combiné ${f2(x.sc.comb)} ≥ seuil ${f2(S.entryThr)} · ${m.txt} · exposition max ${Math.round(E*100)} %`});room-=amt;planned++}}}}
