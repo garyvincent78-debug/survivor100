@@ -2,6 +2,7 @@
 // Même moteur que la page (engine.js, extrait de l'artefact). Aucun appel à une IA.
 import fs from 'fs';
 import path from 'path';
+import vm from 'vm';
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const E = new Function(fs.readFileSync(path.join(here, 'engine.js'), 'utf8') +
@@ -16,12 +17,13 @@ const jget = async url => {
 };
 const P = f => path.join(D, f);
 const rd = (f, d) => { try { return JSON.parse(fs.readFileSync(P(f), 'utf8')) } catch { return d } };
-const wr = (f, o) => { fs.mkdirSync(path.dirname(P(f)), { recursive: true }); fs.writeFileSync(P(f), JSON.stringify(o)) };
+const wr = (f, o) => { fs.mkdirSync(path.dirname(P(f)), { recursive: true }); const tmp = P(f) + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(o)); fs.renameSync(tmp, P(f)) };   // écriture atomique
 const zt = ms => new Date(ms).toISOString().slice(0, 19) + 'Z', iso = t => new Date(t).toISOString().slice(0, 10);
 
 const S = rd('state.json', null);
-if (!S) { console.error('data/state.json manquant'); process.exit(1) }
+if (!S) { console.error(fs.existsSync(P('state.json')) ? 'data/state.json illisible (JSON invalide)' : 'data/state.json manquant'); process.exit(1) }
 E.migrate(S); S.runner = true;
+{ const g = rd('guard.json', null); if (g && g.ts && S.guardSeen !== g.ts) { S.guardSeen = g.ts; S.anom.push({ ts: Date.now(), t: 'ALERTE : un commit extérieur au collecteur a modifié data/ (' + String(g.files).slice(0, 120) + ')' }) } }
 // Stratégie écrite par l'IA (strategy.js) : paramètres, modèles de score, univers, notes.
 // Les règles du jeu (frais, glissement, seuil de survie, mort, pas d'anticipation) sont dans engine.js, hors de portée de strategy.js.
 // Kraken : actifs sans tiret (PAXGEUR…) et actions/ETF US tokenisés « xStocks » (AAPLxUSD…, asset_class=tokenized_asset), cotes publiques en temps réel sans clé.
@@ -33,25 +35,34 @@ const LIM = { auto: [0, 1], entryThr: [0.05, 0.9], stopAtr: [0.5, 10], minHold: 
 const STRAT = process.env.STRAT_FILE || path.join(here, 'strategy.js');
 (function applyStrategy() {
   if (!fs.existsSync(STRAT)) return;
+  const anom = t => { const l = S.anom[S.anom.length - 1]; if (!l || l.t !== t || Date.now() - l.ts > 3600000) S.anom.push({ ts: Date.now(), t }) }, arr = x => Array.isArray(x) ? x : [];
   let st;
-  try { const m = { exports: {} }; new Function('module', 'exports', fs.readFileSync(STRAT, 'utf8'))(m, m.exports); st = m.exports || {} }
-  catch (e) { S.anom.push({ ts: Date.now(), t: 'strategy.js ignorée : ' + String(e.message).slice(0, 120) }); return }
-  const P = {}; for (const [k, [a, b]] of Object.entries(LIM)) { const v = st.params && st.params[k]; if (typeof v === 'number' && isFinite(v)) P[k] = Math.min(b, Math.max(a, v)) }
-  E.X.P = P; if (P.entryThr != null) S.entryThr = P.entryThr;
-  E.X.mods = (Array.isArray(st.models) ? st.models : []).filter(m => m && /^[a-z][a-z0-9]{1,7}$/.test(m.id) && !/^(tr|rv|bk)\d$/.test(m.id) && typeof m.fn === 'function').slice(0, 12)
-    .map(m => ({ id: m.id, fam: String(m.fam || 'IA').slice(0, 30), p: String(m.p || '').slice(0, 40), fn: m.fn }));
-  const u = st.universe || {};
-  WATCH = (Array.isArray(u.watch) ? u.watch : []).filter(isKr).slice(0, 40);
-  for (const sym of u.on || []) { const x = S.uni.find(y => y.sym === sym); if (x) x.on = true }
-  for (const sym of u.off || []) { const x = S.uni.find(y => y.sym === sym); if (x) x.on = false }
-  for (const a of (u.add || []).slice(0, 30)) {
-    if (!a || S.uni.some(y => y.sym === a.sym)) continue;
-    const ok = a.src === 'cb' ? /^[A-Z0-9]{2,10}-EUR$/.test(a.sym) : a.src === 'yh' ? /^[A-Za-z0-9.=^-]{1,14}$/.test(a.sym) : false;
-    if (ok && S.uni.filter(y => y.on).length < 60) S.uni.push({ sym: a.sym, src: a.src, on: true, nm: String(a.nm || a.sym).slice(0, 30), cls: String(a.cls || 'IA').slice(0, 24), ...(a.ccy === 'USD' ? { ccy: 'USD' } : {}), ...(a.inv ? { inv: true } : {}), fails: 0, lastObs: 0, skipUntil: 0 })
-  }
-  S.notesSeen = S.notesSeen || [];
-  for (const n of st.notes || []) if (n && n.id && !S.notesSeen.includes(String(n.id))) { S.notesSeen.push(String(n.id)); S.evo.push({ ts: Date.now(), kind: 'cerveau', text: String(n.text || '').slice(0, 600) }) }
-  S.notesSeen = S.notesSeen.slice(-300); if (S.evo.length > 80) S.evo.splice(0, S.evo.length - 80);
+  // strategy.js est lu comme une DONNÉE : exécuté dans un contexte vm vide (pas de process, require, fetch ni variables d'environnement),
+  // 1 s maximum, puis seul son module.exports en JSON est retenu (les fonctions sont ignorées).
+  try {
+    const ctx = vm.createContext(Object.create(null));
+    st = JSON.parse(vm.runInContext('var module={exports:{}};var exports=module.exports;\n' + fs.readFileSync(STRAT, 'utf8') + '\n;JSON.stringify(module.exports)', ctx, { timeout: 1000 }));
+    if (!st || typeof st !== 'object') st = {};
+  } catch (e) { anom('strategy.js ignorée : ' + String(e.message).slice(0, 120)); return }
+  try {
+    const P = {}; for (const [k, [a, b]] of Object.entries(LIM)) { const v = st.params && st.params[k]; if (typeof v === 'number' && isFinite(v)) P[k] = Math.min(b, Math.max(a, v)) }
+    E.X.P = P; if (P.entryThr != null) S.entryThr = P.entryThr;
+    E.X.mods = [];   // les modèles personnalisés (code) ne sont plus exécutés dans le collecteur : calcule dans ta session et passe des ordres
+    if (arr(st.models).length) anom('strategy.js : « models » n’est plus exécuté (calcule dans ta session, passe des ordres)');
+    const u = st.universe && typeof st.universe === 'object' ? st.universe : {};
+    WATCH = arr(u.watch).filter(isKr).slice(0, 40);
+    for (const sym of arr(u.on)) { const x = S.uni.find(y => y.sym === sym); if (x) x.on = true }
+    for (const sym of arr(u.off)) { const x = S.uni.find(y => y.sym === sym); if (x) x.on = false }
+    for (const a of arr(u.add).slice(0, 30)) {
+      if (!a || S.uni.some(y => y.sym === a.sym)) continue;
+      const ok = a.src === 'cb' ? /^[A-Z0-9]{2,10}-EUR$/.test(a.sym) : a.src === 'yh' ? /^[A-Za-z0-9.=^-]{1,14}$/.test(a.sym) && (a.ccy === 'USD' || a.ccy === 'EUR') : false;   // yh : devise obligatoire (USD ou EUR ; pas de pence)
+      if (ok && S.uni.filter(y => y.on).length < 60) S.uni.push({ sym: a.sym, src: a.src, on: true, nm: String(a.nm || a.sym).slice(0, 30), cls: String(a.cls || 'IA').slice(0, 24), ...(a.ccy === 'USD' ? { ccy: 'USD' } : {}), ...(a.inv ? { inv: true } : {}), fails: 0, lastObs: 0, skipUntil: 0 })
+      else if (!ok) anom('strategy.js : actif refusé ' + String(a.sym).slice(0, 14) + ' (src cb « XXX-EUR », ou yh avec ccy USD/EUR)');
+    }
+    S.notesSeen = S.notesSeen || [];
+    for (const n of arr(st.notes)) if (n && n.id && !S.notesSeen.includes(String(n.id))) { S.notesSeen.push(String(n.id)); S.evo.push({ ts: Date.now(), kind: 'cerveau', text: String(n.text || '').slice(0, 600) }) }
+    S.notesSeen = S.notesSeen.slice(-300); if (S.evo.length > 80) S.evo.splice(0, S.evo.length - 80);
+  } catch (e) { anom('strategy.js : erreur d’application (' + String(e.message).slice(0, 100) + ')') }
 })();
 const now = Date.now(), B = {}, health = { t: now, src: {} };
 // Courtier : exécute les ordres de l'IA (orders.json) au cours réel du moment (bid/ask Coinbase), jamais sur une cotation passée,
@@ -86,24 +97,37 @@ async function krCatalog() {   // catalogue des xStocks, rafraîchi toutes les 6
 }
 async function broker(out) {
   const t = Date.now(), r4 = x => Math.round(x * 1e4) / 1e4;
-  let od = {}; try { od = JSON.parse(fs.readFileSync(ORD, 'utf8')) } catch { }
   S.orders = S.orders || []; S.oseen = S.oseen || []; S.olog = S.olog || [];
   const log = (id, res) => { S.olog.push({ ts: t, id, res }); S.olog = S.olog.slice(-60) };
+  const bad = msg => { if (S.ordBad !== msg) { S.ordBad = msg; log('orders.json', msg) } };   // une seule trace par problème, pas une par minute
+  const num = x => (typeof x === 'number' || (typeof x === 'string' && x.trim() !== '')) ? +x : NaN;
+  let od = {}, fine = true;
+  try { od = JSON.parse(fs.readFileSync(ORD, 'utf8')) } catch (e) { if (e.code !== 'ENOENT') { fine = false; bad('orders.json illisible (JSON invalide) : aucun ordre ni annulation pris en compte') } }
+  if (!od || typeof od !== 'object' || Array.isArray(od)) { od = {}; if (fine) { fine = false; bad('orders.json doit être un objet {"place":[…],"cancel":[…]}') } }
+  if ((od.place != null && !Array.isArray(od.place)) || (od.cancel != null && !Array.isArray(od.cancel))) { fine = false; od = {}; bad('orders.json : « place » et « cancel » doivent être des listes') }
+  if (fine) S.ordBad = '';
+  const places = od.place || [];
+  if (places.length > 50) bad('orders.json : plus de 50 ordres, seuls les 50 premiers sont lus');
   for (const id of od.cancel || []) { const i = S.orders.findIndex(o => o.id === String(id)); if (i >= 0) { S.orders.splice(i, 1); log(String(id), 'annulé') } }
-  for (const o of (od.place || []).slice(0, 50)) {
-    const id = String((o && o.id) || ''); if (!id || S.oseen.includes(id)) continue;
+  for (const o of places.slice(0, 50)) {
+    const id = String((o && o.id) || ''); if (!id || S.oseen.includes(id)) continue;   // un id déjà vu est ignoré : prends toujours un id neuf
     S.oseen.push(id);
-    const typ = ['market', 'limit', 'stop'].includes(o.type) ? o.type : 'market';
+    const no = m => log(id, 'refusé : ' + m + ' (corrige avec un NOUVEL id)');
+    if (o.type != null && !['market', 'limit', 'stop'].includes(o.type)) { no('type invalide (market, limit ou stop)'); continue }
+    const typ = o.type || 'market';
+    if (o.qty != null && o.qty !== 'all' && !(num(o.qty) > 0 && isFinite(num(o.qty)))) { no('qty invalide (nombre > 0 ou "all")'); continue }
+    if (o.amt != null && !(num(o.amt) > 0 && isFinite(num(o.amt)))) { no('amt invalide (nombre > 0)'); continue }
+    let exp = 0; if (o.exp != null && o.exp !== '') { exp = typeof o.exp === 'number' ? o.exp : Date.parse(o.exp); if (!(exp > 0)) { no('exp invalide (ms epoch ou date ISO)'); continue } }
     const isCb = /^[A-Z0-9]{2,10}-EUR$/.test(o.sym || ''), isYh = S.uni.some(u => u.sym === o.sym && u.src === 'yh');
-    if (!(isCb || isYh || isKr(o.sym)) || !['buy', 'sell'].includes(o.side) || (typ !== 'market' && !(+o.px > 0))) { log(id, 'refusé : paire Coinbase XXX-EUR, actif Kraken (AAPLxUSD, PAXGEUR…) ou actif Yahoo déclaré dans strategy.js, sens buy/sell, prix px pour limit/stop'); continue }
+    if (!(isCb || isYh || isKr(o.sym)) || !['buy', 'sell'].includes(o.side) || (typ !== 'market' && !(num(o.px) > 0 && isFinite(num(o.px))))) { no('paire Coinbase XXX-EUR, actif Kraken (AAPLxUSD, PAXGEUR…) ou actif Yahoo déclaré dans strategy.js, sens buy/sell, prix px pour limit/stop'); continue }
     if (isCb && !S.uni.some(u => u.sym === o.sym) && S.uni.filter(u => u.on).length < 60) S.uni.push({ sym: o.sym, src: 'cb', on: true, nm: o.sym, cls: 'Crypto', fails: 0, lastObs: 0, skipUntil: 0 });
-    S.orders.push({ id, sym: o.sym, side: o.side, type: typ, px: +o.px || 0, amt: +o.amt || 0, qty: o.qty === 'all' ? 'all' : (+o.qty || 0), exp: +o.exp || 0, note: String(o.note || '').slice(0, 200), seen: t });
+    S.orders.push({ id, sym: o.sym, side: o.side, type: typ, px: num(o.px) || 0, amt: num(o.amt) || 0, qty: o.qty === 'all' ? 'all' : (num(o.qty) || 0), exp, note: String(o.note || '').slice(0, 200), seen: t });
   }
   S.oseen = S.oseen.slice(-500);
   const syms = [...new Set([...S.orders.map(o => o.sym), ...Object.keys(S.pos)].filter(x => /-EUR$/.test(x)))], Q = {};
   await Promise.all(syms.map(async x => {
     const r = await jget(CBT + x + '/ticker'); health.src['live:' + x] = r.status; const j = r.json;
-    if (r.status === 200 && j && +j.bid > 0 && +j.ask > 0 && Math.abs(t - Date.parse(j.time)) < 120000) Q[x] = { bid: +j.bid, ask: +j.ask, px: +j.price || (+j.bid + +j.ask) / 2, t: Date.parse(j.time) };
+    if (r.status === 200 && j && +j.bid > 0 && +j.ask >= +j.bid && +j.ask / +j.bid < 1.05 && Math.abs(t - Date.parse(j.time)) < 120000) Q[x] = { bid: +j.bid, ask: +j.ask, px: +j.price || (+j.bid + +j.ask) / 2, t: Date.parse(j.time) };
   }));
   for (const x of new Set([...S.orders.map(o => o.sym), ...Object.keys(S.pos)])) {   // actifs Yahoo : dernier cours lu, au plus 25 min (différé de 15 min à Paris)
     const u = S.uni.find(y => y.sym === x); if (!u || u.src !== 'yh') continue;
@@ -114,7 +138,8 @@ async function broker(out) {
   S.board = Object.fromEntries(WATCH.filter(x => kq[x]).map(x => [x, Object.assign({ bid: +kq[x].bid.toPrecision(7), ask: +kq[x].ask.toPrecision(7) }, kq[x].stale ? { stale: true } : {})]));
   const oc = { now: t, trades: [], pts: [] };
   for (const o of S.orders.slice()) {
-    const done = res => { S.orders.splice(S.orders.indexOf(o), 1); log(o.id, res) };
+    const done = res => { const k = S.orders.indexOf(o); if (k >= 0) S.orders.splice(k, 1); log(o.id, res) };
+    try {
     if (o.exp && t > o.exp) { done('expiré'); continue }
     const q = Q[o.sym]; if (!q) { if (!o.warned) { o.warned = 1; log(o.id, 'en attente : cote fraîche indisponible (marché fermé, source bloquée ou cours trop ancien)') } continue }
     const L = S.last[o.sym]; if (L && L.x && L.x.ok === false) continue;
@@ -125,15 +150,19 @@ async function broker(out) {
     if (!buy && !p) { done('refusé : aucune position à vendre'); continue }
     const qty = buy ? 0 : (o.qty === 'all' ? p.q : o.qty > 0 ? Math.min(o.qty, p.q) : o.amt > 0 ? Math.min(p.q, o.amt / q.bid) : p.q);
     const u = S.uni.find(x => x.sym === o.sym) || { sym: o.sym, src: isKr(o.sym) ? 'kr' : 'cb' };
-    S.last[o.sym] = Object.assign(S.last[o.sym] || { c: q.px, t: Math.floor(t / H) * H, x: null }, { live: q.px, ltT: q.t, obs: t, url: isKr(o.sym) ? KRT + o.sym + (isTok(o.sym) ? '&asset_class=tokenized_asset' : '') : CBT + o.sym + '/ticker', src: isKr(o.sym) ? 'kr' : 'cb' });
+    if (u.src !== 'yh') S.last[o.sym] = Object.assign(S.last[o.sym] || { c: q.px, t: Math.floor(t / H) * H, x: null }, { live: q.px, ltT: q.t, obs: t, url: isKr(o.sym) ? KRT + o.sym + (isTok(o.sym) ? '&asset_class=tokenized_asset' : '') : CBT + o.sym + '/ticker', src: isKr(o.sym) ? 'kr' : 'cb' });
     const e = E.fill(S, { sym: o.sym, side: o.side, amt: o.amt, qty, decT: Math.min(o.seen, t - 1), model: 'cerveau', why: o.note || ('Ordre ' + o.type + ' de l’IA') }, { u, bar: { t, o: pxf, h: pxf, l: pxf, c: pxf } }, t, oc);
     if (!e) { done('refusé : montant < 5 € ou espèces insuffisantes'); continue }
     out.trades.push(e); done('exécuté à ' + e.price.toFixed(4) + ' €');
+    } catch (err) { done('erreur interne : ' + String(err && err.message).slice(0, 80)) }
   }
   for (const x of Object.keys(S.pos)) if (Q[x]) S.mark[x] = (Q[x].bid + Q[x].ask) / 2;
   const LV = E.liq(S), thr = E.thrAt(S, t), lastT = out.pts.length ? out.pts[out.pts.length - 1][0] : (S.lastPt || 0);
   if (t - lastT >= 290000 || LV < thr) { out.pts.push([t, r4(LV), r4(thr)]); S.lastPt = t }
-  if (LV < thr) { S.status = 'dead'; S.died = { ts: t, lv: r4(LV), thr: r4(thr) }; S.pend = []; S.orders = [] }
+  if (LV < thr) {   // sous le seuil : la mort est définitive, donc confirmée au passage suivant (≥ 30 s) avec une nouvelle lecture des cotes
+    if (!S.dw) { S.dw = t; S.anom.push({ ts: t, t: `Sous le seuil (${r4(LV)} < ${r4(thr)}) : confirmation au prochain passage` }) }
+    else if (t - S.dw >= 30000) { S.status = 'dead'; S.died = { ts: t, lv: r4(LV), thr: r4(thr) }; S.pend = []; S.orders = [] }
+  } else S.dw = 0;
 }
 let lim = now;
 // Passerelle Firecrawl pour Yahoo, bloqué (HTTP 429) depuis les serveurs GitHub. Clé : secret GitHub FIRECRAWL_KEY (facultatif).
@@ -176,6 +205,7 @@ if (S.status === 'alive') {
   for (const u of cbs) { if (!got[u.sym]) { u.fails++; if (u.fails < 3) hold(u); continue } handle(u, got[u.sym], Date.now(), `${E.CB_URL}${u.sym}/candles?granularity=900`) }
   // actions, ETF, matières premières, devises : lectures groupées Yahoo (20 actifs par lecture)
   const ys = S.uni.filter(u => u.on && u.src === 'yh');
+  if (ys.length) health.src.yh = FCK ? 'clé_firecrawl' : 'sans_clé';   // sans clé, Yahoo est bloqué depuis GitHub : ces actifs ne reçoivent plus de cotes
   if (ys.length) {
     const gap = eqHours(now) ? 1 : 8, fcDue = FCK && slotOf(now) - slotOf(S.yfcAt || 0) >= gap;
     for (const it of E.planYh(ys, B, now, S.cursor || undefined)) {
@@ -193,7 +223,7 @@ if (S.status === 'alive') {
     }
   }
   const out = E.advance(S, B, lim, now); S.lastFetch = now; S.anom = S.anom.slice(-40);
-  if (S.status === 'alive') await broker(out);
+  if (S.status === 'alive') { try { await broker(out) } catch (e) { S.anom.push({ ts: now, t: 'courtier : ' + String(e && e.message).slice(0, 120) }); console.error(e) } }
   for (const e of out.trades) fs.appendFileSync(P('journal.jsonl'), JSON.stringify(e) + '\n');
   const by = {}; for (const p of out.pts) (by[iso(p[0])] = by[iso(p[0])] || []).push(p);
   for (const [d, pts] of Object.entries(by)) { const doc = rd(`equity/${d}.json`, { day: d, pts: [] }); doc.pts = doc.pts.concat(pts); wr(`equity/${d}.json`, doc) }
@@ -204,10 +234,10 @@ if (S.status === 'alive') {   // horizon de survie lisible par l'IA : seuils des
   for (let i = 0; i < 24 * 60 && (nx.length < 8 || dl === null); i++, ts += h) {
     const th = E.thrAt(S, ts); if (th > prev + 1e-9) { if (nx.length < 8) nx.push({ t: ts, thr: Math.round(th * 1e4) / 1e4 }); if (dl === null && th > LV) dl = ts; prev = th }
   }
-  S.horizon = { lv: Math.round(LV * 1e4) / 1e4, thr: Math.round(E.thrAt(S, Date.now()) * 1e4) / 1e4, next: nx, cashDeadline: dl };
+  S.horizon = { lv: Math.round(LV * 1e4) / 1e4, thr: Math.round(E.thrAt(S, Date.now()) * 1e4) / 1e4, next: nx, cashDeadline: dl, far: Object.fromEntries([30, 60, 90, 180, 365].map(k => [k, Math.round(E.thrAt(S, Date.now() + k * 86400000) * 100) / 100])) };
 }
 wr('state.json', S);
 const jl = fs.existsSync(P('journal.jsonl')) ? fs.readFileSync(P('journal.jsonl'), 'utf8').split('\n').filter(Boolean) : [];
-const journal = jl.slice(-JN).map(l => { const e = JSON.parse(l); delete e.url; return e });
-const days = fs.existsSync(P('equity')) ? fs.readdirSync(P('equity')).sort().slice(-7) : [];
-wr('view.json', { runner: true, updated: now, health, jn: JN, state: S, journal, eq: days.map(f => rd('equity/' + f)) });
+const journal = jl.slice(-JN).map(l => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean);
+const days = fs.existsSync(P('equity')) ? fs.readdirSync(P('equity')).filter(f => f.endsWith('.json')).sort().slice(-7) : [];
+wr('view.json', { runner: true, updated: now, health, jn: JN, state: S, journal, eq: days.map(f => rd('equity/' + f, null)).filter(Boolean) });

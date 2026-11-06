@@ -15,7 +15,18 @@ jobs:
     timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
-      - run: bash loop.sh
+      - name: Code de confiance (copie du commit TRUST_SHA)
+        env:
+          TRUST_SHA: ""
+        run: |
+          mkdir -p /tmp/core
+          if [ -n "$TRUST_SHA" ]; then
+            for k in 1 2 3; do git fetch -q --depth=1 origin "$TRUST_SHA" && break; sleep 5; done
+            git archive FETCH_HEAD run.mjs engine.js loop.sh | tar -x -C /tmp/core || { echo "TRUST_SHA introuvable" >&2; exit 1; }
+          else
+            cp run.mjs engine.js loop.sh /tmp/core/
+          fi
+      - run: bash /tmp/core/loop.sh
         env:
           GH_TOKEN: ${{ github.token }}
           FIRECRAWL_KEY: ${{ secrets.FIRECRAWL_KEY }}
