@@ -24,6 +24,11 @@ if (!S) { console.error('data/state.json manquant'); process.exit(1) }
 E.migrate(S); S.runner = true;
 // Stratégie écrite par l'IA (strategy.js) : paramètres, modèles de score, univers, notes.
 // Les règles du jeu (frais, glissement, seuil de survie, mort, pas d'anticipation) sont dans engine.js, hors de portée de strategy.js.
+// Kraken : actifs sans tiret (PAXGEUR…) et actions/ETF US tokenisés « xStocks » (AAPLxUSD…, asset_class=tokenized_asset), cotes publiques en temps réel sans clé.
+const KRT = 'https://api.kraken.com/0/public/Ticker?pair=';
+const isKr = x => typeof x === 'string' && /^[A-Za-z0-9]{2,12}(USD|EUR)$/.test(x) && !x.includes('-');
+const isTok = x => /[A-Z0-9]x(USD|EUR)$/.test(x);
+let WATCH = [];
 const LIM = { auto: [0, 1], entryThr: [0.05, 0.9], stopAtr: [0.5, 10], minHold: [1, 96], maxTrades: [1, 200], expFloor: [0.05, 1], dayGoal: [0.005, 1] };
 const STRAT = process.env.STRAT_FILE || path.join(here, 'strategy.js');
 (function applyStrategy() {
@@ -36,6 +41,7 @@ const STRAT = process.env.STRAT_FILE || path.join(here, 'strategy.js');
   E.X.mods = (Array.isArray(st.models) ? st.models : []).filter(m => m && /^[a-z][a-z0-9]{1,7}$/.test(m.id) && !/^(tr|rv|bk)\d$/.test(m.id) && typeof m.fn === 'function').slice(0, 12)
     .map(m => ({ id: m.id, fam: String(m.fam || 'IA').slice(0, 30), p: String(m.p || '').slice(0, 40), fn: m.fn }));
   const u = st.universe || {};
+  WATCH = (Array.isArray(u.watch) ? u.watch : []).filter(isKr).slice(0, 40);
   for (const sym of u.on || []) { const x = S.uni.find(y => y.sym === sym); if (x) x.on = true }
   for (const sym of u.off || []) { const x = S.uni.find(y => y.sym === sym); if (x) x.on = false }
   for (const a of (u.add || []).slice(0, 30)) {
@@ -52,6 +58,28 @@ const now = Date.now(), B = {}, health = { t: now, src: {} };
 // puis contrôle la mort en direct. Format : {"place":[{id,sym:"XXX-EUR",side:"buy"|"sell",type:"market"|"limit"|"stop",amt(€, achat),qty(unités|"all", vente),px,exp(ms),note}],"cancel":[id]}
 const ORD = process.env.ORDERS_FILE || path.join(here, 'orders.json');
 const CBT = 'https://api.exchange.coinbase.com/products/';
+async function krQuotes(syms) {   // → { sym: {bid, ask, px, t} } en euros (USD converti au taux EUR/USD Kraken)
+  const out = {}, t = Date.now(); syms = [...new Set(syms)].filter(x => isKr(x) && !(S.krBad || []).includes(x)); if (!syms.length) return out;
+  const get = async (pairs, tok) => { const r = await jget(KRT + pairs.join(',') + (tok ? '&asset_class=tokenized_asset' : '')); health.src['kr:' + (tok ? 'xstocks' : 'spot')] = r.status; const e = (r.json && r.json.error) || []; return { res: r.json && r.json.result && !e.length ? r.json.result : null, unknown: e.some(m => /Unknown asset pair/.test(m)) } };
+  let fx = 1;
+  if (syms.some(x => /USD$/.test(x))) { const { res } = await get(['EURUSD'], false), k = res && Object.values(res)[0]; if (k && +k.a[0] > 0 && +k.b[0] > 0) fx = (+k.a[0] + +k.b[0]) / 2; else return out }
+  for (const tok of [false, true]) {
+    const ps = syms.filter(x => isTok(x) === tok); if (!ps.length) continue;
+    let { res } = await get(ps, tok);
+    if (!res) { res = {}; await Promise.all(ps.map(async p => { const g = await get([p], tok); if (g.res) Object.assign(res, g.res); else if (g.unknown) (S.krBad = S.krBad || []).push(p) })) }
+    for (const [k, v] of Object.entries(res)) {
+      const sym = ps.find(p => p.toUpperCase() === k.toUpperCase()) || k, a = +v.a[0], b = +v.b[0];
+      if (!(a > 0 && b > 0 && a >= b && a / b < 1.05)) continue;
+      const d = /USD$/.test(sym) ? fx : 1; out[sym] = { bid: b / d, ask: a / d, px: +v.c[0] / d, t };
+    }
+  }
+  return out;
+}
+async function krCatalog() {   // catalogue des xStocks, rafraîchi toutes les 6 h dans data/kraken_xstocks.json
+  const t = Date.now(); if (S.krCatAt && t - S.krCatAt < 21600000) return; S.krCatAt = t;
+  const r = await jget('https://api.kraken.com/0/public/AssetPairs?aclass_base=tokenized_asset');
+  if (r.status === 200 && r.json && r.json.result) wr('kraken_xstocks.json', { t, pairs: Object.values(r.json.result).map(p => ({ p: p.altname, quote: p.quote, min: p.ordermin, st: p.status })) });
+}
 async function broker(out) {
   const t = Date.now(), r4 = x => Math.round(x * 1e4) / 1e4;
   let od = {}; try { od = JSON.parse(fs.readFileSync(ORD, 'utf8')) } catch { }
@@ -63,7 +91,7 @@ async function broker(out) {
     S.oseen.push(id);
     const typ = ['market', 'limit', 'stop'].includes(o.type) ? o.type : 'market';
     const isCb = /^[A-Z0-9]{2,10}-EUR$/.test(o.sym || ''), isYh = S.uni.some(u => u.sym === o.sym && u.src === 'yh');
-    if (!(isCb || isYh) || !['buy', 'sell'].includes(o.side) || (typ !== 'market' && !(+o.px > 0))) { log(id, 'refusé : paire Coinbase XXX-EUR ou actif Yahoo déclaré dans strategy.js (universe.add, src yh), sens buy/sell, prix px pour limit/stop'); continue }
+    if (!(isCb || isYh || isKr(o.sym)) || !['buy', 'sell'].includes(o.side) || (typ !== 'market' && !(+o.px > 0))) { log(id, 'refusé : paire Coinbase XXX-EUR, actif Kraken (AAPLxUSD, PAXGEUR…) ou actif Yahoo déclaré dans strategy.js, sens buy/sell, prix px pour limit/stop'); continue }
     if (isCb && !S.uni.some(u => u.sym === o.sym) && S.uni.filter(u => u.on).length < 60) S.uni.push({ sym: o.sym, src: 'cb', on: true, nm: o.sym, cls: 'Crypto', fails: 0, lastObs: 0, skipUntil: 0 });
     S.orders.push({ id, sym: o.sym, side: o.side, type: typ, px: +o.px || 0, amt: +o.amt || 0, qty: o.qty === 'all' ? 'all' : (+o.qty || 0), exp: +o.exp || 0, note: String(o.note || '').slice(0, 200), seen: t });
   }
@@ -77,6 +105,9 @@ async function broker(out) {
     const u = S.uni.find(y => y.sym === x); if (!u || u.src !== 'yh') continue;
     const L = S.last[x]; if (L && L.live > 0 && L.ltT && t - L.ltT <= 1500000 && t - (L.obs || 0) <= 1500000) Q[x] = { bid: L.live, ask: L.live, px: L.live, t: L.ltT };
   }
+  await krCatalog();
+  const kq = await krQuotes([...S.orders.map(o => o.sym), ...Object.keys(S.pos), ...WATCH]); Object.assign(Q, kq);
+  S.board = Object.fromEntries(WATCH.filter(x => kq[x]).map(x => [x, { bid: +kq[x].bid.toPrecision(7), ask: +kq[x].ask.toPrecision(7) }]));
   const oc = { now: t, trades: [], pts: [] };
   for (const o of S.orders.slice()) {
     const done = res => { S.orders.splice(S.orders.indexOf(o), 1); log(o.id, res) };
@@ -89,11 +120,11 @@ async function broker(out) {
     if (buy && !(o.amt > 0)) { done('refusé : montant amt (€) requis pour un achat'); continue }
     if (!buy && !p) { done('refusé : aucune position à vendre'); continue }
     const qty = buy ? 0 : (o.qty === 'all' ? p.q : o.qty > 0 ? Math.min(o.qty, p.q) : o.amt > 0 ? Math.min(p.q, o.amt / q.bid) : p.q);
-    const u = S.uni.find(x => x.sym === o.sym) || { sym: o.sym, src: 'cb' };
+    const u = S.uni.find(x => x.sym === o.sym) || { sym: o.sym, src: isKr(o.sym) ? 'kr' : 'cb' };
+    S.last[o.sym] = Object.assign(S.last[o.sym] || { c: q.px, t: Math.floor(t / H) * H, x: null }, { live: q.px, ltT: q.t, obs: t, url: isKr(o.sym) ? KRT + o.sym + (isTok(o.sym) ? '&asset_class=tokenized_asset' : '') : CBT + o.sym + '/ticker', src: isKr(o.sym) ? 'kr' : 'cb' });
     const e = E.fill(S, { sym: o.sym, side: o.side, amt: o.amt, qty, decT: Math.min(o.seen, t - 1), model: 'cerveau', why: o.note || ('Ordre ' + o.type + ' de l’IA') }, { u, bar: { t, o: pxf, h: pxf, l: pxf, c: pxf } }, t, oc);
     if (!e) { done('refusé : montant < 5 € ou espèces insuffisantes'); continue }
     out.trades.push(e); done('exécuté à ' + e.price.toFixed(4) + ' €');
-    S.last[o.sym] = Object.assign(S.last[o.sym] || { c: q.px, t: Math.floor(t / H) * H, x: null }, { live: q.px, ltT: q.t, obs: t, url: CBT + o.sym + '/ticker', src: 'cb' });
   }
   for (const x of Object.keys(S.pos)) if (Q[x]) S.mark[x] = (Q[x].bid + Q[x].ask) / 2;
   const LV = E.liq(S), thr = E.thrAt(S, t), lastT = out.pts.length ? out.pts[out.pts.length - 1][0] : (S.lastPt || 0);

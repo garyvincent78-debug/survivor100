@@ -1,10 +1,10 @@
 
 const H=900000,HOUR=3600000,DAY=86400000,START_CASH=100,FLOOR0=90,GROW=1.02;
-const FEE={cb:0.001,yh:0.001},SLIP=0.0005,MIN_ORDER=5,MIN_HOLD=4,MAX_TRADES_DAY=12;
+const FEE={cb:0.001,yh:0.001,kr:0.001},SLIP=0.0005,MIN_ORDER=5,MIN_HOLD=4,MAX_TRADES_DAY=12;
 const DAY_GOAL=0.02;
 const X={mods:[],P:{}},par=(k,d)=>X.P[k]!=null?X.P[k]:d,allM=()=>MODELS.concat(X.mods);
 function ensureModels(S){for(const m of X.mods){if(S.w[m.id]==null)S.w[m.id]=1/(MODELS.length+X.mods.length);if(!S.perf[m.id])S.perf[m.id]={m:0,q:0,n:0}}}
-const SRC={cb:'Coinbase Exchange',yh:'Yahoo Finance'};
+const SRC={cb:'Coinbase Exchange',yh:'Yahoo Finance',kr:'Kraken'};
 const KR={'BTC-EUR':'XBTEUR','ETH-EUR':'ETHEUR','SOL-EUR':'SOLEUR','XRP-EUR':'XRPEUR'},XTOL=0.01,CHUNK=19,REF='EURUSD=X';
 const CB_URL='https://api.exchange.coinbase.com/products/',SP_URL='https://query1.finance.yahoo.com/v8/finance/spark?symbols=',KR_URL='https://api.kraken.com/0/public/Ticker?pair=';
 const MODELS=[
