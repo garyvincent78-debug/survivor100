@@ -71,6 +71,10 @@ async function krQuotes(syms) {   // → { sym: {bid, ask, px, t} } en euros (US
       const sym = ps.find(p => p.toUpperCase() === k.toUpperCase()) || k, a = +v.a[0], b = +v.b[0];
       if (!(a > 0 && b > 0 && a >= b && a / b < 1.05)) continue;
       const d = /USD$/.test(sym) ? fx : 1; out[sym] = { bid: b / d, ask: a / d, px: +v.c[0] / d, t };
+      if (tok) {   // marché fermé (week-end…) : cote inchangée depuis 30 min → figée, les ordres attendent
+        const key = v.b[0] + '|' + v.a[0], z = (S.krSeen = S.krSeen || {})[sym];
+        if (!z || z.k !== key) S.krSeen[sym] = { k: key, t }; else if (t - z.t > 1800000) out[sym].stale = true;
+      }
     }
   }
   return out;
@@ -106,8 +110,8 @@ async function broker(out) {
     const L = S.last[x]; if (L && L.live > 0 && L.ltT && t - L.ltT <= 1500000 && t - (L.obs || 0) <= 1500000) Q[x] = { bid: L.live, ask: L.live, px: L.live, t: L.ltT };
   }
   await krCatalog();
-  const kq = await krQuotes([...S.orders.map(o => o.sym), ...Object.keys(S.pos), ...WATCH]); Object.assign(Q, kq);
-  S.board = Object.fromEntries(WATCH.filter(x => kq[x]).map(x => [x, { bid: +kq[x].bid.toPrecision(7), ask: +kq[x].ask.toPrecision(7) }]));
+  const kq = await krQuotes([...S.orders.map(o => o.sym), ...Object.keys(S.pos), ...WATCH]); for (const [k, q] of Object.entries(kq)) if (!q.stale) Q[k] = q;
+  S.board = Object.fromEntries(WATCH.filter(x => kq[x]).map(x => [x, Object.assign({ bid: +kq[x].bid.toPrecision(7), ask: +kq[x].ask.toPrecision(7) }, kq[x].stale ? { stale: true } : {})]));
   const oc = { now: t, trades: [], pts: [] };
   for (const o of S.orders.slice()) {
     const done = res => { S.orders.splice(S.orders.indexOf(o), 1); log(o.id, res) };
@@ -194,6 +198,13 @@ if (S.status === 'alive') {
   const by = {}; for (const p of out.pts) (by[iso(p[0])] = by[iso(p[0])] || []).push(p);
   for (const [d, pts] of Object.entries(by)) { const doc = rd(`equity/${d}.json`, { day: d, pts: [] }); doc.pts = doc.pts.concat(pts); wr(`equity/${d}.json`, doc) }
   console.log(`cursor ${new Date(S.cursor).toISOString()} | points ${out.pts.length} | trades ${out.trades.length} | statut ${S.status} | santé ${JSON.stringify(health.src)}`);
+}
+if (S.status === 'alive') {   // horizon de survie lisible par l'IA : seuils des prochains minuits Paris et échéance des espèces seules
+  const LV = E.liq(S), nx = [], h = 3600000; let ts = Math.ceil(Date.now() / h) * h, prev = E.thrAt(S, Date.now()), dl = null;
+  for (let i = 0; i < 24 * 60 && (nx.length < 8 || dl === null); i++, ts += h) {
+    const th = E.thrAt(S, ts); if (th > prev + 1e-9) { if (nx.length < 8) nx.push({ t: ts, thr: Math.round(th * 1e4) / 1e4 }); if (dl === null && th > LV) dl = ts; prev = th }
+  }
+  S.horizon = { lv: Math.round(LV * 1e4) / 1e4, thr: Math.round(E.thrAt(S, Date.now()) * 1e4) / 1e4, next: nx, cashDeadline: dl };
 }
 wr('state.json', S);
 const jl = fs.existsSync(P('journal.jsonl')) ? fs.readFileSync(P('journal.jsonl'), 'utf8').split('\n').filter(Boolean) : [];
