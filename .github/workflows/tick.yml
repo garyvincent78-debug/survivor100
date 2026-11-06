@@ -1,0 +1,22 @@
+name: tick
+on:
+  schedule:
+    - cron: '2,17,32,47 * * * *'
+  workflow_dispatch:
+concurrency:
+  group: survivor100
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: node run.mjs
+      - run: |
+          git config user.name "survivor100-bot"
+          git config user.email "survivor100-bot@users.noreply.github.com"
+          git add -A data
+          git diff --cached --quiet || (git commit -q -m "tick $(date -u +%FT%TZ)" && git push -q)
