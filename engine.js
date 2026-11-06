@@ -2,6 +2,8 @@
 const H=900000,HOUR=3600000,DAY=86400000,START_CASH=100,FLOOR0=90,GROW=1.02;
 const FEE={cb:0.001,yh:0.001},SLIP=0.0005,MIN_ORDER=5,MIN_HOLD=4,MAX_TRADES_DAY=12;
 const DAY_GOAL=0.02;
+const X={mods:[],P:{}},par=(k,d)=>X.P[k]!=null?X.P[k]:d,allM=()=>MODELS.concat(X.mods);
+function ensureModels(S){for(const m of X.mods){if(S.w[m.id]==null)S.w[m.id]=1/(MODELS.length+X.mods.length);if(!S.perf[m.id])S.perf[m.id]={m:0,q:0,n:0}}}
 const SRC={cb:'Coinbase Exchange',yh:'Yahoo Finance'};
 const KR={'BTC-EUR':'XBTEUR','ETH-EUR':'ETHEUR','SOL-EUR':'SOLEUR','XRP-EUR':'XRPEUR'},XTOL=0.01,CHUNK=19,REF='EURUSD=X';
 const CB_URL='https://api.exchange.coinbase.com/products/',SP_URL='https://query1.finance.yahoo.com/v8/finance/spark?symbols=',KR_URL='https://api.kraken.com/0/public/Ticker?pair=';
@@ -41,15 +43,17 @@ function scores(b,i){
  const rev=n=>{const w=c.slice(-n),m=w.reduce((x,y)=>x+y,0)/n,s=Math.max(sd(w),1e-9),z=(last-m)/s;return Math.abs(z)<1?0:-clip(z/2.5,-1,1)};
  const brk=n=>{let hi=-Infinity,lo=Infinity;for(let k=i-n;k<i;k++){hi=Math.max(hi,b[k].h);lo=Math.min(lo,b[k].l)}return last>hi?1:last<lo?-1:clip((last-(hi+lo)/2)/((hi-lo)/2||1),-1,1)*0.3};
  let atr=0;for(let k=i-13;k<=i;k++){const x=b[k],p=b[k-1].c;atr+=Math.max(x.h-x.l,Math.abs(x.h-p),Math.abs(x.l-p))}atr/=14;
- return{s:{tr1:trend(12,48),tr2:trend(24,96),rv1:rev(24),rv2:rev(48),bk1:brk(24),bk2:brk(72)},sig,atr}}
-const comb=(w,s)=>MODELS.reduce((a,m)=>a+w[m.id]*s[m.id],0);
-function bestModel(S,s){let best=MODELS[0],v=-9;for(const m of MODELS){const x=S.w[m.id]*s[m.id];if(x>v){v=x;best=m}}return{id:best.id,txt:`${best.fam} ${best.p} (s=${f2(s[best.id])}, poids ${f2(S.w[best.id])})`}}
+ const s={tr1:trend(12,48),tr2:trend(24,96),rv1:rev(24),rv2:rev(48),bk1:brk(24),bk2:brk(72)};
+ for(const m of X.mods){let v=0;try{v=clip(+m.fn(b,i,{c,sig,atr,ema,sd,clip})||0,-1,1)}catch(e){v=0}s[m.id]=v}
+ return{s,sig,atr}}
+const comb=(w,s)=>allM().reduce((a,m)=>a+w[m.id]*s[m.id],0);
+function bestModel(S,s){let best=MODELS[0],v=-9;for(const m of allM()){const x=S.w[m.id]*(s[m.id]||0);if(x>v){v=x;best=m}}return{id:best.id,txt:`${best.fam} ${best.p} (s=${f2(s[best.id])}, poids ${f2(S.w[best.id])})`}}
 function liq(S){let v=S.cash;for(const[s,p]of Object.entries(S.pos))v+=p.q*(S.mark[s]??p.cost/p.q)*(1-FEE[p.src]-SLIP);return v}
 function expo(S){let v=0;for(const[s,p]of Object.entries(S.pos))v+=p.q*(S.mark[s]??0);return v}
-const expCap=(LV,thr)=>clip(0.30+0.70*(1-((LV-thr)/LV)/0.08),0.30,1);
+const expCap=(LV,thr)=>{const f=par('expFloor',0.30);return clip(f+(1-f)*(1-((LV-thr)/LV)/0.08),f,1)};
 const hasPend=(S,s)=>S.pend.some(o=>o.sym===s);
-function reweight(S){const raw={};let t=0;for(const m of MODELS){const p=S.perf[m.id],sh=p.n>=200?p.m/Math.sqrt(p.q+1e-12):0;raw[m.id]=Math.exp(clip(8*sh,-3,3));t+=raw[m.id]}
- let t2=0;for(const m of MODELS){raw[m.id]=Math.max(0.04,raw[m.id]/t);t2+=raw[m.id]}for(const m of MODELS)S.w[m.id]=raw[m.id]/t2}
+function reweight(S){const raw={};let t=0;for(const m of allM()){const p=S.perf[m.id],sh=p.n>=200?p.m/Math.sqrt(p.q+1e-12):0;raw[m.id]=Math.exp(clip(8*sh,-3,3));t+=raw[m.id]}
+ let t2=0;for(const m of allM()){raw[m.id]=Math.max(0.04,raw[m.id]/t);t2+=raw[m.id]}for(const m of allM())S.w[m.id]=raw[m.id]/t2}
 function journal(S,out,o,f,px,q,amt,fee,cashB,lvB,pnl){
  const rec=S.last[o.sym]||{};
  const e={seq:S.jr.n+1,ts:f.bar.t,decT:o.decT,proc:out.now,sym:o.sym,side:o.side,qty:q,price:px,amt,fee,cashB,cashA:S.cash,lvB,lvA:liq(S),pnl:pnl??null,model:o.model,why:o.why,
@@ -81,12 +85,12 @@ function review(S,tau,LV,thr,d){
  if(nxt&&expo(S)<0.3*LV&&((S.credits.cyc||5)+(nxt.src==='cb'?1:0))*(1440/S.cfg.cadenceMin)<=S.cfg.capDay){nxt.on=true;S.evo.push({ts:tau,kind:'univers',text:`Univers : ajout de ${nxt.sym} (liquidités > 70 %, ${on} instruments suivis)`,lv0:r4(LV),lv1:null})}
  st.nSince=0;st.feeSince=0;st.grossSince=0;S.dayIdx=d;if(S.evo.length>80)S.evo.splice(0,S.evo.length-80)}
 function stepOne(S,B,T,out){
- const tau=T+H,learn=tau<=S.t0,fresh=[];
+ ensureModels(S);const tau=T+H,learn=tau<=S.t0,fresh=[];
  for(const u of S.uni){if(!u.on)continue;const b=B[u.sym];if(!b)continue;const i=idxAt(b,T);if(i>=0)fresh.push({u,b,i,bar:b[i]})}
  if(!learn)for(const o of S.pend.slice()){const f=fresh.find(x=>x.u.sym===o.sym);if(!f||T<=o.decT)continue;S.pend.splice(S.pend.indexOf(o),1);const e=fill(S,o,f,T,out);if(e)out.trades.push(e)}
  for(const f of fresh)S.mark[f.u.sym]=f.bar.c;
  for(const f of fresh){const pv=S.sc[f.u.sym];if(pv&&f.i>0&&pv.t===f.b[f.i-1].t){const r=f.bar.c/f.b[f.i-1].c-1;
-  for(const m of MODELS){const g=clip(pv.s[m.id],0,1)*(r-0.0001),p=S.perf[m.id];p.m+=(g-p.m)*0.01;p.q+=(g*g-p.q)*0.01;p.n++}}}
+  for(const m of allM()){const g=clip(pv.s[m.id]||0,0,1)*(r-0.0001),p=S.perf[m.id];p.m+=(g-p.m)*0.01;p.q+=(g*g-p.q)*0.01;p.n++}}}
  for(const f of fresh){const sc=scores(f.b,f.i);if(sc){sc.t=f.bar.t;sc.comb=comb(S.w,sc.s);S.sc[f.u.sym]=sc}}
  reweight(S);
  if(learn)return;
@@ -95,14 +99,14 @@ function stepOne(S,B,T,out){
  if(LV<thr){S.status='dead';S.died={ts:tau,lv:r4(LV),thr:r4(thr)};S.pend=[];return}
  const d=dayN(S,tau);if(d>S.dayIdx)review(S,tau,LV,thr,d);
  if(!S.day0||S.day0.d!==d)S.day0={d,lv:LV,done:false};
- if(!S.day0.done&&LV>=S.day0.lv*(1+DAY_GOAL)){S.day0.done=true;S.evo.push({ts:tau,kind:'objectif',text:`Objectif du jour atteint : ${f2(LV)} € (+${f2((LV/S.day0.lv-1)*100)} % depuis minuit) · plus aucun achat jusqu’à minuit, les stops restent actifs`})}
+ if(!S.day0.done&&LV>=S.day0.lv*(1+par('dayGoal',DAY_GOAL))){S.day0.done=true;S.evo.push({ts:tau,kind:'objectif',text:`Objectif du jour atteint : ${f2(LV)} € (+${f2((LV/S.day0.lv-1)*100)} % depuis minuit) · plus aucun achat jusqu’à minuit, les stops restent actifs`})}
  const E=expCap(LV,thr),dk=Math.floor(tau/DAY);let used=S.tt.d===dk?S.tt.n:0,planned=S.pend.length;
  for(const f of fresh){const p=S.pos[f.u.sym],sc=S.sc[f.u.sym];if(!p||!sc||hasPend(S,f.u.sym))continue;
-  p.peak=Math.max(p.peak,f.bar.c);const stop=f.bar.c<p.peak-3*sc.atr;
-  if((T-p.entryT)/H>=MIN_HOLD&&(sc.comb<0||stop)){const m=bestModel(S,sc.s);S.pend.push({sym:f.u.sym,side:'sell',decT:T,model:m.id,why:stop?'Stop suiveur : cours sous le plus haut moins 3 ATR':`Score combiné ${f2(sc.comb)} < 0 · ${m.txt}`})}}
+  p.peak=Math.max(p.peak,f.bar.c);const stop=f.bar.c<p.peak-par('stopAtr',3)*sc.atr;
+  if((T-p.entryT)/H>=par('minHold',MIN_HOLD)&&(sc.comb<0||stop)){const m=bestModel(S,sc.s);S.pend.push({sym:f.u.sym,side:'sell',decT:T,model:m.id,why:stop?`Stop suiveur : cours sous le plus haut moins ${par('stopAtr',3)} ATR`:`Score combiné ${f2(sc.comb)} < 0 · ${m.txt}`})}}
  const cands=S.day0.done?[]:fresh.map(f=>({f,sc:S.sc[f.u.sym]})).filter(x=>x.sc&&x.sc.t===x.f.bar.t&&x.sc.comb>S.entryThr&&!S.pos[x.f.u.sym]&&!hasPend(S,x.f.u.sym)).sort((a,b)=>b.sc.comb-a.sc.comb).slice(0,2);
  if(cands.length){let room=Math.max(0,E*LV-expo(S)),tot=cands.reduce((a,x)=>a+x.sc.comb,0);
-  for(const x of cands){if(used+planned>=MAX_TRADES_DAY)break;const amt=Math.min(E*LV*x.sc.comb/tot,room);
+  for(const x of cands){if(used+planned>=par('maxTrades',MAX_TRADES_DAY))break;const amt=Math.min(E*LV*x.sc.comb/tot,room);
    if(amt>=Math.max(MIN_ORDER,0.08*LV)){const m=bestModel(S,x.sc.s);S.pend.push({sym:x.f.u.sym,side:'buy',decT:T,amt:r4(amt),model:m.id,why:`Score combiné ${f2(x.sc.comb)} ≥ seuil ${f2(S.entryThr)} · ${m.txt} · exposition max ${Math.round(E*100)} %`});room-=amt;planned++}}}}
 function advance(S,B,limit,now){
  const out={trades:[],pts:[],now};if(S.status!=='alive')return out;

@@ -5,7 +5,7 @@ import path from 'path';
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const E = new Function(fs.readFileSync(path.join(here, 'engine.js'), 'utf8') +
-  ';return{H,REF,KR,KR_URL,CB_URL,migrate,ingest,advance,krakenQuotes,planYh,ingestYh}')();
+  ';return{H,REF,KR,KR_URL,CB_URL,migrate,ingest,advance,krakenQuotes,planYh,ingestYh,X}')();
 const { H } = E;
 const D = process.env.DATA_DIR || path.join(here, 'data');
 const JN = 150; // entrées du journal servies à la page (le journal complet reste dans journal.jsonl)
@@ -22,6 +22,31 @@ const zt = ms => new Date(ms).toISOString().slice(0, 19) + 'Z', iso = t => new D
 const S = rd('state.json', null);
 if (!S) { console.error('data/state.json manquant'); process.exit(1) }
 E.migrate(S); S.runner = true;
+// Stratégie écrite par l'IA (strategy.js) : paramètres, modèles de score, univers, notes.
+// Les règles du jeu (frais, glissement, seuil de survie, mort, pas d'anticipation) sont dans engine.js, hors de portée de strategy.js.
+const LIM = { entryThr: [0.05, 0.9], stopAtr: [0.5, 10], minHold: [1, 96], maxTrades: [1, 200], expFloor: [0.05, 1], dayGoal: [0.005, 1] };
+const STRAT = process.env.STRAT_FILE || path.join(here, 'strategy.js');
+(function applyStrategy() {
+  if (!fs.existsSync(STRAT)) return;
+  let st;
+  try { const m = { exports: {} }; new Function('module', 'exports', fs.readFileSync(STRAT, 'utf8'))(m, m.exports); st = m.exports || {} }
+  catch (e) { S.anom.push({ ts: Date.now(), t: 'strategy.js ignorée : ' + String(e.message).slice(0, 120) }); return }
+  const P = {}; for (const [k, [a, b]] of Object.entries(LIM)) { const v = st.params && st.params[k]; if (typeof v === 'number' && isFinite(v)) P[k] = Math.min(b, Math.max(a, v)) }
+  E.X.P = P; if (P.entryThr != null) S.entryThr = P.entryThr;
+  E.X.mods = (Array.isArray(st.models) ? st.models : []).filter(m => m && /^[a-z][a-z0-9]{1,7}$/.test(m.id) && !/^(tr|rv|bk)\d$/.test(m.id) && typeof m.fn === 'function').slice(0, 12)
+    .map(m => ({ id: m.id, fam: String(m.fam || 'IA').slice(0, 30), p: String(m.p || '').slice(0, 40), fn: m.fn }));
+  const u = st.universe || {};
+  for (const sym of u.on || []) { const x = S.uni.find(y => y.sym === sym); if (x) x.on = true }
+  for (const sym of u.off || []) { const x = S.uni.find(y => y.sym === sym); if (x) x.on = false }
+  for (const a of (u.add || []).slice(0, 30)) {
+    if (!a || S.uni.some(y => y.sym === a.sym)) continue;
+    const ok = a.src === 'cb' ? /^[A-Z0-9]{2,10}-EUR$/.test(a.sym) : a.src === 'yh' ? /^[A-Za-z0-9.=^-]{1,14}$/.test(a.sym) : false;
+    if (ok && S.uni.filter(y => y.on).length < 60) S.uni.push({ sym: a.sym, src: a.src, on: true, nm: String(a.nm || a.sym).slice(0, 30), cls: String(a.cls || 'IA').slice(0, 24), ...(a.ccy === 'USD' ? { ccy: 'USD' } : {}), ...(a.inv ? { inv: true } : {}), fails: 0, lastObs: 0, skipUntil: 0 })
+  }
+  S.notesSeen = S.notesSeen || [];
+  for (const n of st.notes || []) if (n && n.id && !S.notesSeen.includes(String(n.id))) { S.notesSeen.push(String(n.id)); S.evo.push({ ts: Date.now(), kind: 'cerveau', text: String(n.text || '').slice(0, 600) }) }
+  S.notesSeen = S.notesSeen.slice(-300); if (S.evo.length > 80) S.evo.splice(0, S.evo.length - 80);
+})();
 const now = Date.now(), B = {}, health = { t: now, src: {} };
 let lim = now;
 const hold = u => { lim = Math.min(lim, u.lastObs || 0) };
