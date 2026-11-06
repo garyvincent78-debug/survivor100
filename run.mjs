@@ -62,8 +62,9 @@ async function broker(out) {
     const id = String((o && o.id) || ''); if (!id || S.oseen.includes(id)) continue;
     S.oseen.push(id);
     const typ = ['market', 'limit', 'stop'].includes(o.type) ? o.type : 'market';
-    if (!/^[A-Z0-9]{2,10}-EUR$/.test(o.sym || '') || !['buy', 'sell'].includes(o.side) || (typ !== 'market' && !(+o.px > 0))) { log(id, 'refusé : paire XXX-EUR Coinbase, sens buy/sell et prix px (limit/stop) requis'); continue }
-    if (!S.uni.some(u => u.sym === o.sym) && S.uni.filter(u => u.on).length < 60) S.uni.push({ sym: o.sym, src: 'cb', on: true, nm: o.sym, cls: 'Crypto', fails: 0, lastObs: 0, skipUntil: 0 });
+    const isCb = /^[A-Z0-9]{2,10}-EUR$/.test(o.sym || ''), isYh = S.uni.some(u => u.sym === o.sym && u.src === 'yh');
+    if (!(isCb || isYh) || !['buy', 'sell'].includes(o.side) || (typ !== 'market' && !(+o.px > 0))) { log(id, 'refusé : paire Coinbase XXX-EUR ou actif Yahoo déclaré dans strategy.js (universe.add, src yh), sens buy/sell, prix px pour limit/stop'); continue }
+    if (isCb && !S.uni.some(u => u.sym === o.sym) && S.uni.filter(u => u.on).length < 60) S.uni.push({ sym: o.sym, src: 'cb', on: true, nm: o.sym, cls: 'Crypto', fails: 0, lastObs: 0, skipUntil: 0 });
     S.orders.push({ id, sym: o.sym, side: o.side, type: typ, px: +o.px || 0, amt: +o.amt || 0, qty: o.qty === 'all' ? 'all' : (+o.qty || 0), exp: +o.exp || 0, note: String(o.note || '').slice(0, 200), seen: t });
   }
   S.oseen = S.oseen.slice(-500);
@@ -72,11 +73,15 @@ async function broker(out) {
     const r = await jget(CBT + x + '/ticker'); health.src['live:' + x] = r.status; const j = r.json;
     if (r.status === 200 && j && +j.bid > 0 && +j.ask > 0 && Math.abs(t - Date.parse(j.time)) < 120000) Q[x] = { bid: +j.bid, ask: +j.ask, px: +j.price || (+j.bid + +j.ask) / 2, t: Date.parse(j.time) };
   }));
+  for (const x of new Set([...S.orders.map(o => o.sym), ...Object.keys(S.pos)])) {   // actifs Yahoo : dernier cours lu, au plus 25 min (différé de 15 min à Paris)
+    const u = S.uni.find(y => y.sym === x); if (!u || u.src !== 'yh') continue;
+    const L = S.last[x]; if (L && L.live > 0 && L.ltT && t - L.ltT <= 1500000 && t - (L.obs || 0) <= 1500000) Q[x] = { bid: L.live, ask: L.live, px: L.live, t: L.ltT };
+  }
   const oc = { now: t, trades: [], pts: [] };
   for (const o of S.orders.slice()) {
     const done = res => { S.orders.splice(S.orders.indexOf(o), 1); log(o.id, res) };
     if (o.exp && t > o.exp) { done('expiré'); continue }
-    const q = Q[o.sym]; if (!q) continue;
+    const q = Q[o.sym]; if (!q) { if (!o.warned) { o.warned = 1; log(o.id, 'en attente : cote fraîche indisponible (marché fermé, source bloquée ou cours trop ancien)') } continue }
     const L = S.last[o.sym]; if (L && L.x && L.x.ok === false) continue;
     const buy = o.side === 'buy', hit = o.type === 'market' || (o.type === 'limit' && (buy ? q.ask <= o.px : q.bid >= o.px)) || (o.type === 'stop' && (buy ? q.ask >= o.px : q.bid <= o.px));
     if (!hit) continue;
@@ -96,6 +101,18 @@ async function broker(out) {
   if (LV < thr) { S.status = 'dead'; S.died = { ts: t, lv: r4(LV), thr: r4(thr) }; S.pend = []; S.orders = [] }
 }
 let lim = now;
+// Passerelle Firecrawl pour Yahoo, bloqué (HTTP 429) depuis les serveurs GitHub. Clé : secret GitHub FIRECRAWL_KEY (facultatif).
+const FCK = process.env.FIRECRAWL_KEY || '';
+const slotOf = t => Math.floor((t - 20000) / H);
+const eqHours = t => { const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Paris', weekday: 'short', hour: 'numeric', minute: 'numeric', hourCycle: 'h23' }).formatToParts(new Date(t)).map(x => [x.type, x.value])); const m = +p.hour * 60 + +p.minute; return !['Sat', 'Sun'].includes(p.weekday) && m >= 535 && m <= 1325 };
+async function fcget(url) {
+  try {
+    const r = await fetch('https://api.firecrawl.dev/v1/scrape', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + FCK }, body: JSON.stringify({ url, formats: ['rawHtml'], maxAge: 0 }), signal: AbortSignal.timeout(60000) });
+    const j = await r.json().catch(() => null); if (!r.ok || !j || !j.success) return { status: r.status || 500, json: null };
+    const h = String((j.data && (j.data.rawHtml || j.data.html)) || ''), a = h.indexOf('{'), b = h.lastIndexOf('}'); let d = null; try { d = JSON.parse(h.slice(a, b + 1)) } catch { }
+    const sc = (j.data.metadata && j.data.metadata.statusCode) || 200; return { status: d && sc === 200 ? 200 : (sc !== 200 ? sc : 502), json: d };
+  } catch { return { status: 0, json: null } }
+}
 const anomOnce = t => { const l = S.anom[S.anom.length - 1]; if (!l || l.t !== t || now - l.ts > 3600000) S.anom.push({ ts: now, t }) };
 const hold = u => { lim = Math.min(lim, u.lastObs || 0) };
 let kq = null;
@@ -124,11 +141,21 @@ if (S.status === 'alive') {
   for (const u of cbs) { if (!got[u.sym]) { u.fails++; if (u.fails < 3) hold(u); continue } handle(u, got[u.sym], Date.now(), `${E.CB_URL}${u.sym}/candles?granularity=900`) }
   // actions, ETF, matières premières, devises : lectures groupées Yahoo (20 actifs par lecture)
   const ys = S.uni.filter(u => u.on && u.src === 'yh');
-  if (ys.length) for (const it of E.planYh(ys, B, now, S.cursor || undefined)) {
-    let r = await jget(it.url); if (r.status !== 200) { const r2 = await jget(it.url.replace('query1.', 'query2.')); if (r2.status === 200) r = r2 } health.src['yh:' + it.us[0].sym] = r.status;
-    const d = r.status === 200 && r.json && !r.json.spark ? r.json : null;
-    if (!d) { S.yfail = (S.yfail || 0) + 1; if (S.yfail < 3) it.us.forEach(hold); anomOnce('Lecture groupée Yahoo en échec (HTTP ' + r.status + ')'); continue }
-    S.yfail = 0; E.ingestYh(it, d, Date.now(), handle).forEach(u => { hold(u); S.anom.push({ ts: now, t: u.sym + ' : absent de la réponse Yahoo' }) });
+  if (ys.length) {
+    const gap = eqHours(now) ? 1 : 8, fcDue = FCK && slotOf(now) - slotOf(S.yfcAt || 0) >= gap;
+    for (const it of E.planYh(ys, B, now, S.cursor || undefined)) {
+      let r = null;
+      if (!S.yDirectFailAt || now - S.yDirectFailAt > 1800000) { r = await jget(it.url); S.yDirectFailAt = r.status === 200 ? 0 : now }
+      if ((!r || r.status !== 200) && FCK) {
+        if (!fcDue) { if (gap === 1 && (S.yfail || 0) < 3) it.us.forEach(hold); continue }
+        S.yfcAt = now; r = await fcget(it.url); S.credits.fc = (S.credits.fc || 0) + 1; S.credits.fcDay = (S.credits.fcDay && S.credits.fcDay.d === iso(now) ? S.credits.fcDay : { d: iso(now), n: 0 }); S.credits.fcDay.n++;
+      }
+      if (!r) { if ((S.yfail || 0) < 3) it.us.forEach(hold); continue }
+      health.src['yh:' + it.us[0].sym] = r.status;
+      const d = r.status === 200 && r.json && !r.json.spark ? r.json : null;
+      if (!d) { S.yfail = (S.yfail || 0) + 1; if (S.yfail < 3) it.us.forEach(hold); anomOnce('Lecture groupée Yahoo en échec (HTTP ' + r.status + ')'); continue }
+      S.yfail = 0; E.ingestYh(it, d, Date.now(), handle).forEach(u => { hold(u); S.anom.push({ ts: now, t: u.sym + ' : absent de la réponse Yahoo' }) });
+    }
   }
   const out = E.advance(S, B, lim, now); S.lastFetch = now; S.anom = S.anom.slice(-40);
   if (S.status === 'alive') await broker(out);

@@ -144,13 +144,13 @@ function mkRate(e){const ts=(e&&e.timestamp)||[],cl=(e&&e.close)||[],a=[];
  if(!a.length)return null;
  return t=>{let lo=0,hi=a.length-1,r=a[0][1];while(lo<=hi){const m=(lo+hi)>>1;if(a[m][0]<=t){r=a[m][1];lo=m+1}else hi=m-1}return r}}
 function sparkBars(e,u,rate){
- const ts=(e&&e.timestamp)||[],cl=(e&&e.close)||[],bars=[];let pt=0,pc=0,last=null;
+ const ts=(e&&e.timestamp)||[],cl=(e&&e.close)||[],bars=[];let pt=0,pc=0,last=null,lastT=null;
  for(let i=0;i<ts.length;i++){const t=ts[i]*1000,c=cl[i];if(!(c>0))continue;
   let p=c;if(u.inv)p=1/c;else if(u.ccy==='USD'){const r=rate?rate(t):0;if(!(r>0))continue;p=c/r}
-  last=p;if(t%H!==0)continue;
+  last=p;lastT=t;if(t%H!==0)continue;
   const g=pc>0&&t-pt<=1.5*H,o=g?pc:p;
   bars.push({timestamp_ms:t,open:o,high:Math.max(o,p),low:Math.min(o,p),close:p,volume:0});pt=t;pc=p}
- return{bars,last}}
+ return{bars,last,lastT}}
 function migrate(S){
  if(S.mig>=3)return false;
  for(const d of UNIVERSE){const u=S.uni.find(x=>x.sym===d.sym);
@@ -169,7 +169,7 @@ function planYh(ys,B,now,since){
  return out}
 function ingestYh(it,d,obs,handle){
  const rate=mkRate(d[REF]),miss=[];
- for(const u of it.us){const e=d[u.sym];if(!e){miss.push(u);continue}const sb=sparkBars(e,u,rate);handle(u,{bars:sb.bars,latest_trade:sb.last>0?{price:sb.last}:null},obs,it.url)}
+ for(const u of it.us){const e=d[u.sym];if(!e){miss.push(u);continue}const sb=sparkBars(e,u,rate);handle(u,{bars:sb.bars,latest_trade:sb.last>0?{price:sb.last,t:sb.lastT}:null},obs,it.url)}
  return miss}
 function planFetch(S,B,now){
  const day=new Date(now).toISOString().slice(0,10);if(S.credits.day!==day){S.credits.day=day;S.credits.today=0}
