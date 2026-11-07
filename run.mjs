@@ -51,7 +51,7 @@ const STRAT = process.env.STRAT_FILE || path.join(here, 'strategy.js');
     if (arr(st.models).length) anom('strategy.js : « models » n’est plus exécuté (calcule dans ta session, passe des ordres)');
     const u = st.universe && typeof st.universe === 'object' ? st.universe : {};
     WATCH = arr(u.watch).filter(isKr).slice(0, 40);
-    FEEDS = arr(st.feeds).filter(x => x && /^[a-z0-9_-]{1,24}$/.test(x.id) && typeof x.url === 'string' && /^https:\/\/[^\s]{4,400}$/.test(x.url) && !/^https:\/\/(localhost|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[|0\.)/i.test(x.url)).slice(0, 12);
+    FEEDS = arr(st.feeds).filter(x => x && /^[a-z0-9_-]{1,24}$/.test(x.id) && typeof x.url === 'string' && /^https:\/\/[^\s]{4,400}$/.test(x.url) && !/^https:\/\/(localhost|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[|0\.)/i.test(x.url));   // aucun plafond sur le nombre de sources
     for (const sym of arr(u.on)) { const x = S.uni.find(y => y.sym === sym); if (x) x.on = true }
     for (const sym of arr(u.off)) { const x = S.uni.find(y => y.sym === sym); if (x) x.on = false }
     for (const a of arr(u.add).slice(0, 30)) {
@@ -226,12 +226,14 @@ if (S.status === 'alive') {
   const out = E.advance(S, B, lim, now); S.lastFetch = now; S.anom = S.anom.slice(-40);
   if (FEEDS.length) {   // sources libres déclarées par l'IA (strategy.js → feeds) : GET public, relevé brut horodaté, jamais interprété ni complété
     const fd = rd('feeds.json', {}), now2 = Date.now();
-    await Promise.all(FEEDS.map(async x => {
+    const cap = Math.max(2000, Math.min(30000, Math.floor(8e6 / FEEDS.length)));   // seule borne : taille totale du fichier (~8 Mo), répartie entre les sources
+    const one = async x => {
       const every = Math.max(60, Math.min(86400, +x.everySec || 300)) * 1000, o = fd[x.id];
       if (o && o.url === x.url && now2 - o.t < every) return;
-      try { const r = await fetch(x.url, { headers: { ...UA, accept: 'application/json,text/*;q=0.9' }, signal: AbortSignal.timeout(15000), redirect: 'follow' }); const tx = await r.text(); fd[x.id] = { t: Date.now(), url: x.url, http: r.status, bytes: tx.length, body: tx.slice(0, 30000) } }
+      try { const r = await fetch(x.url, { headers: { ...UA, accept: 'application/json,text/*;q=0.9' }, signal: AbortSignal.timeout(15000), redirect: 'follow' }); const tx = await r.text(); fd[x.id] = { t: Date.now(), url: x.url, http: r.status, bytes: tx.length, body: tx.slice(0, cap) } }
       catch (e) { fd[x.id] = { t: Date.now(), url: x.url, http: 0, err: String(e && e.message).slice(0, 100), body: '' } }
-    }));
+    };
+    for (let i = 0; i < FEEDS.length; i += 25) await Promise.all(FEEDS.slice(i, i + 25).map(one));   // 25 requêtes à la fois
     for (const k of Object.keys(fd)) if (!FEEDS.some(x => x.id === k)) delete fd[k];
     wr('feeds.json', fd); health.feeds = Object.fromEntries(Object.entries(fd).map(([k, v]) => [k, v.http]));
   }
