@@ -254,4 +254,6 @@ wr('state.json', S);
 const jl = fs.existsSync(P('journal.jsonl')) ? fs.readFileSync(P('journal.jsonl'), 'utf8').split('\n').filter(Boolean) : [];
 const journal = jl.slice(-JN).map(l => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean);
 const days = fs.existsSync(P('equity')) ? fs.readdirSync(P('equity')).filter(f => f.endsWith('.json')).sort().slice(-7) : [];
-wr('view.json', { runner: true, updated: now, health, jn: JN, state: S, journal, eq: days.map(f => rd('equity/' + f, null)).filter(Boolean) });
+const BR = path.join(path.dirname(ORD), 'brain'), tx = (n, k, tail) => { try { const t = fs.readFileSync(path.join(BR, n), 'utf8'); return tail ? t.slice(-k) : t.slice(0, k) } catch { return '' } };   // textes écrits par l'IA, affichés tels quels (échappés côté page)
+const brain = { synthese: tx('synthese.md', 14000), decisions: tx('decisions.md', 40000, true), memoire: tx('memoire.md', 12000, true), besoins: tx('besoins.md', 4000), next: tx('next.txt', 40).trim(), agents: (() => { try { return fs.readdirSync(path.join(BR, 'agents')).filter(x => x.endsWith('.md') && x !== 'README.md').slice(0, 50) } catch { return [] } })() };
+wr('view.json', { runner: true, updated: now, health, jn: JN, state: S, journal, brain, eq: days.map(f => rd('equity/' + f, null)).filter(Boolean) });
