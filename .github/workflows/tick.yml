@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Code de confiance (copie du commit TRUST_SHA)
         env:
-          TRUST_SHA: "5a79493ea630a4bd77199108c7cd285e126ec974"
+          TRUST_SHA: "b790ab39d42dac750dd8f8d1e5c7fa3b9e4bceba"
         run: |
           mkdir -p /tmp/core
           if [ -n "$TRUST_SHA" ]; then
