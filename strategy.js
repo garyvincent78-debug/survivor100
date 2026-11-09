@@ -1,4 +1,4 @@
 // Stratégie de l'IA : réécrite librement par le « cerveau » (voir BRAIN.md).
 // Ce fichier ne peut pas modifier les règles du jeu (frais, glissement, seuil de survie, mort).
 // EURGBP et EURCHF coupés par défaut : une seule lecture Yahoo (1 crédit Firecrawl) par créneau de 15 min.
-module.exports = { params: {}, models: [], universe: { on: [], off: ['EURGBP=X', 'EURCHF=X'], add: [], watch: ['AAPLxUSD', 'MSFTxUSD', 'NVDAxUSD', 'TSLAxUSD', 'SPYxUSD', 'QQQxUSD', 'PAXGEUR'] }, notes: [] }
+module.exports = { params: {}, models: [], universe: { on: [], off: ['EURGBP=X', 'EURCHF=X'], add: [], watch: ['AAPLxUSD', 'MSFTxUSD', 'NVDAxUSD', 'TSLAxUSD', 'SPYxUSD', 'QQQxUSD', 'PAXGEUR'] }, notes: [{ id: 'pari-0911', text: "Lundi 09/11 : j'ai mis mes 100 € dans l'ether (acheté 1 903,21 €). En espèces je meurs le 11/11 à minuit (Paris), la barre passant à 101,35 €. Le week-end a purgé la crypto (≈1 Md$ de paris à crédit liquidés, indice de peur 28/100). Aucun avantage prouvé : c'est un pari. Une vente automatique à 1 945 € met le gain à l'abri (≈101,9 €, au-dessus de la barre). Pas de stop-loss : il ne sauverait rien." }] }

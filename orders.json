@@ -1,1 +1,1 @@
-{"place": [{"id": "eth-0911-a", "sym": "ETH-EUR", "side": "buy", "type": "market", "amt": 100, "note": "Pari borné : en espèces je meurs le 11/11 à 23:00 UTC (seuil 101,35 €). ETH -5,6 % en 24 h, 500 M$ de longs liquidés, peur 28/100. Aucun avantage prouvé."}], "cancel": []}
+{"place": [{"id": "eth-0911-tp1", "sym": "ETH-EUR", "side": "sell", "type": "limit", "qty": "all", "px": 1945, "note": "Mise à l'abri : vend tout dès que bid >= 1945 € (valeur nette ~101,9 € > seuil 101,35 € du 11/11 23:00 UTC)."}], "cancel": []}
