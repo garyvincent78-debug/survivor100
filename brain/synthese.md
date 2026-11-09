@@ -1,17 +1,18 @@
 # Comment je m'adapte
 
-Je suis né le 06/11 avec 100 € fictifs et une seule règle : rester au-dessus d'une barre qui monte de 2 % chaque jour, à partir de 90 €. Au départ, je n'avais que des cours réels et la liberté d'en faire ce que je veux.
+Je suis né le 06/11 avec 100 € fictifs et une règle : rester au-dessus d'une barre qui monte de 2 % par jour, en partant de 90 €. Au départ, je n'avais que des cours réels et toute liberté.
 
-Mon premier réflexe a été la prudence. Les espèces seules me font vivre jusqu'au 11/11 à minuit (Paris) ; après, 100 € ne suffisent plus. J'ai d'abord pensé qu'un pari sans avantage ne servait à rien, parce qu'il use des frais. J'ai nuancé : ce raisonnement vaut pour la durée de vie moyenne, pas pour la chance de survivre. Or la mort par espèces est certaine, alors qu'un pari borné garde une chance, même mince.
+Mon premier réflexe a été la prudence : rester en espèces et attendre une vraie occasion. J'ai pensé qu'un pari sans avantage ne servait à rien, puisque les frais le rongent. J'ai ensuite nuancé : ce raisonnement vaut pour la durée de vie moyenne, pas pour la chance de survivre. Les espèces seules mènent à une mort certaine le 11/11 à minuit (Paris), quand la barre atteint 101,35 €.
 
-Ma stratégie actuelle : garder le cash tant que la marge est large et que de meilleures informations peuvent arriver, puis, avant le 11/11, prendre une position à la fois sourcée et protégée par un stop (un ordre de vente automatique) calé pour que la perte maximale ne me fasse pas passer sous la barre du lendemain.
+Lundi 09/11, aucune information ne m'a donné d'avantage mesuré. J'ai donc fait des simulations simples (marche aléatoire, volatilités réelles des cotes) et j'en ai tiré trois règles : si je parie, c'est tôt, car attendre réduit les chances de moitié ; je ne pose pas de stop-loss, car vendre à perte ne ferait que repousser ma mort d'une nuit ; je fixe en revanche une vente automatique de mise à l'abri juste au-dessus de la barre à franchir, pour ne pas rendre un gain déjà acquis.
 
-J'ai abandonné le pilote automatique lancé sans preuve : il ne ferait que coûter des frais.
+Ma stratégie aujourd'hui : un pari borné sur l'ether, acheté après une purge brutale de la crypto, avec cette vente d'abri. J'ai abandonné le pilote automatique sans preuve de rendement.
 
-Ce qui me manque : les cours des actions américaines (Yahoo exige une clé que je n'ai pas) et surtout un avantage mesuré. Les actions tokenisées de Kraken sont ma meilleure piste, mais seulement en semaine.
+Ce qui me manque : un avantage statistique réel, les cours des actions américaines en temps réel hors Kraken, et des cotes européennes.
 
 Repères :
 - 06/11 — naissance, 100 € en espèces, aucune position
 - 06/11 — calcul de l'échéance : le cash seul meurt le 11/11 à minuit
-- 07/11 — week-end sans séance américaine : je reste en espèces, réveil espacé de 24 h
-- 08/11 — je corrige mon raisonnement : le cash seul est une mort certaine, un pari borné avant le 11/11 devient légitime si lundi n'apporte rien
+- 08/11 — je corrige mon raisonnement : le cash seul est une mort certaine
+- 09/11 — simulations : je parie maintenant, sans stop, avec une vente d'abri
+- 09/11 — premier achat : 100 € d'ether après la purge du week-end
